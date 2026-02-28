@@ -1,8 +1,455 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
+const config = {
+  categories: [
+    {
+      id: 'floors',
+      name: 'Floors',
+      subtypes: [
+        { id: 'vinyl', name: 'Vinyl', defaultPrice: 3.50, unit: 'sq ft' },
+        { id: 'laminate', name: 'Laminate', defaultPrice: 4.00, unit: 'sq ft' },
+        { id: 'hardwood', name: 'Hardwood', defaultPrice: 8.00, unit: 'sq ft' },
+        { id: 'tile', name: 'Tile Floor', defaultPrice: 10.00, unit: 'sq ft' },
+        { id: 'carpet', name: 'Carpet', defaultPrice: 3.00, unit: 'sq ft' }
+      ]
+    },
+    {
+      id: 'cabinets',
+      name: 'Cabinets',
+      subtypes: [
+        { id: 'stock', name: 'Stock Cabinets', defaultPrice: 150.00, unit: 'linear ft' },
+        { id: 'semi-custom', name: 'Semi-Custom', defaultPrice: 300.00, unit: 'linear ft' },
+        { id: 'custom', name: 'Custom', defaultPrice: 600.00, unit: 'linear ft' }
+      ]
+    },
+    {
+      id: 'bathrooms',
+      name: 'Bathrooms',
+      subtypes: [
+        { id: 'vanity', name: 'Vanity Installation', defaultPrice: 500.00, unit: 'each' },
+        { id: 'toilet', name: 'Toilet Replacement', defaultPrice: 250.00, unit: 'each' },
+        { id: 'shower', name: 'Shower Pan/Tile', defaultPrice: 2500.00, unit: 'each' }
+      ]
+    },
+    {
+      id: 'painting',
+      name: 'Painting',
+      subtypes: [
+        { id: 'interior-walls', name: 'Interior Walls', defaultPrice: 2.50, unit: 'sq ft' },
+        { id: 'trim', name: 'Trim & Baseboards', defaultPrice: 1.50, unit: 'linear ft' },
+        { id: 'exterior', name: 'Exterior', defaultPrice: 3.00, unit: 'sq ft' }
+      ]
+    },
+    {
+      id: 'drywall',
+      name: 'Drywall',
+      subtypes: [
+        { id: 'hang-tape', name: 'Hang & Tape', defaultPrice: 2.00, unit: 'sq ft' },
+        { id: 'texture', name: 'Texture', defaultPrice: 1.00, unit: 'sq ft' },
+        { id: 'patch', name: 'Patching', defaultPrice: 75.00, unit: 'hole' }
+      ]
+    },
+    {
+      id: 'demolition',
+      name: 'Demolition',
+      subtypes: [
+        { id: 'gut', name: 'Full Gut', defaultPrice: 5.00, unit: 'sq ft' },
+        { id: 'flooring-demo', name: 'Flooring Removal', defaultPrice: 1.50, unit: 'sq ft' },
+        { id: 'cabinet-demo', name: 'Cabinet Removal', defaultPrice: 20.00, unit: 'linear ft' }
+      ]
+    },
+    {
+      id: 'electrical',
+      name: 'Electrical',
+      subtypes: [
+        { id: 'receptacle', name: 'New Receptacle', defaultPrice: 150.00, unit: 'each' },
+        { id: 'fixture', name: 'Light Fixture', defaultPrice: 100.00, unit: 'each' },
+        { id: 'panel', name: 'Panel Upgrade', defaultPrice: 2000.00, unit: 'each' }
+      ]
+    },
+    {
+      id: 'plumbing',
+      name: 'Plumbing',
+      subtypes: [
+        { id: 'sink', name: 'Sink Installation', defaultPrice: 200.00, unit: 'each' },
+        { id: 'faucet', name: 'Faucet Replacement', defaultPrice: 150.00, unit: 'each' },
+        { id: 'water-heater', name: 'Water Heater', defaultPrice: 1200.00, unit: 'each' }
+      ]
+    }
+  ]
+};
+
+const STORAGE_KEY = 'reconstruction_estimator_data';
+
+let userData = {
+  currentProfile: 'default',
+  profiles: {
+    default: {
+      name: 'Default',
+      prices: {},
+      labor: {},
+      waste: {}
+    }
+  }
+};
+
+let currentView = 'categories'; // 'categories', 'subtypes', 'estimator', 'contractors'
+let selectedCategory = null;
+let selectedSubtype = null;
+
+// Load from localStorage
+function loadData() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.profiles) {
+        userData = parsed;
+      } else {
+        // Migrate old data schema to new schema
+        userData = {
+          currentProfile: 'default',
+          profiles: {
+            default: {
+              name: 'Default',
+              prices: parsed.prices || {},
+              labor: parsed.labor || {},
+              waste: parsed.waste || {}
+            }
+          }
+        };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load data from localStorage', e);
+  }
+  // Ensure schema
+  if (!userData.profiles) userData.profiles = {};
+  if (!userData.profiles.default) {
+    userData.profiles.default = { name: 'Default', prices: {}, labor: {}, waste: {} };
+  }
+  if (!userData.currentProfile || !userData.profiles[userData.currentProfile]) {
+    userData.currentProfile = 'default';
+  }
+}
+
+function saveData() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(userData));
+}
+
+function getCurrentProfile() {
+  return userData.profiles[userData.currentProfile];
+}
+
+function resetData() {
+  const profile = getCurrentProfile();
+  if (confirm(`Are you sure you want to reset all custom prices and percentages to defaults for ${profile.name}?`)) {
+    profile.prices = {};
+    profile.labor = {};
+    profile.waste = {};
+    saveData();
+    render();
+  }
+}
+
+function getPrice(categoryId, subtypeId) {
+  const key = `${categoryId}-${subtypeId}`;
+  const profile = getCurrentProfile();
+  if (profile.prices[key] !== undefined) {
+    return profile.prices[key];
+  }
+  const cat = config.categories.find(c => c.id === categoryId);
+  const sub = cat.subtypes.find(s => s.id === subtypeId);
+  return sub.defaultPrice;
+}
+
+function getLabor(categoryId, subtypeId) {
+  const key = `${categoryId}-${subtypeId}`;
+  return getCurrentProfile().labor[key] || 0;
+}
+
+function getWaste(categoryId, subtypeId) {
+  const key = `${categoryId}-${subtypeId}`;
+  return getCurrentProfile().waste[key] || 0;
+}
+
+function setPrice(categoryId, subtypeId, value) {
+  const key = `${categoryId}-${subtypeId}`;
+  getCurrentProfile().prices[key] = parseFloat(value) || 0;
+  saveData();
+}
+
+function setLabor(categoryId, subtypeId, value) {
+  const key = `${categoryId}-${subtypeId}`;
+  getCurrentProfile().labor[key] = parseFloat(value) || 0;
+  saveData();
+}
+
+function setWaste(categoryId, subtypeId, value) {
+  const key = `${categoryId}-${subtypeId}`;
+  getCurrentProfile().waste[key] = parseFloat(value) || 0;
+  saveData();
+}
+
+function formatMoney(amount) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+}
+
+// Navigation
+function goBack() {
+  if (currentView === 'estimator') {
+    currentView = 'subtypes';
+    selectedSubtype = null;
+  } else if (currentView === 'subtypes') {
+    currentView = 'categories';
+    selectedCategory = null;
+  } else if (currentView === 'contractors') {
+    currentView = 'categories';
+  }
+  render();
+}
+
+// Rendering
+function render() {
+  const appContent = document.getElementById('app-content');
+  const btnBack = document.getElementById('btn-back');
+  
+  // Update profile badge
+  const profileNameEl = document.getElementById('current-profile-name');
+  if (profileNameEl) {
+    const profile = getCurrentProfile();
+    profileNameEl.innerText = profile.name === 'Default' ? '' : `(${profile.name})`;
+  }
+  
+  if (currentView === 'categories') {
+    btnBack.classList.add('hidden');
+    appContent.innerHTML = renderCategories();
+  } else if (currentView === 'subtypes') {
+    btnBack.classList.remove('hidden');
+    appContent.innerHTML = renderSubtypes();
+  } else if (currentView === 'estimator') {
+    btnBack.classList.remove('hidden');
+    appContent.innerHTML = renderEstimator();
+    attachEstimatorEvents();
+  } else if (currentView === 'contractors') {
+    btnBack.classList.remove('hidden');
+    appContent.innerHTML = renderContractors();
+  }
+}
+
+function renderContractors() {
+  let html = `<h2 class="mb-8">Select Contractor</h2><div class="grid">`;
+  
+  Object.keys(userData.profiles).forEach(profileId => {
+    const profile = userData.profiles[profileId];
+    const isCurrent = profileId === userData.currentProfile;
+    html += `<button class="card ${isCurrent ? 'active-profile' : ''}" data-action="select-profile" data-id="${profileId}">
+      <span>${profile.name} ${isCurrent ? '(Active)' : ''}</span>
+      <span>&rarr;</span>
+    </button>`;
+  });
+  
+  html += `<button class="card" data-action="add-profile">
+    <span>+ Add Contractor</span>
+    <span></span>
+  </button>`;
+  
+  html += `</div>`;
+  return html;
+}
+
+function renderCategories() {
+  let html = `<h2 class="mb-8">Select Job Type</h2><div class="grid">`;
+  config.categories.forEach(cat => {
+    html += `<button class="card" data-action="select-category" data-id="${cat.id}">
+      <span>${cat.name}</span>
+      <span>&rarr;</span>
+    </button>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function renderSubtypes() {
+  const cat = config.categories.find(c => c.id === selectedCategory);
+  if (!cat) return '';
+  let html = `<h2 class="mb-8">${cat.name} &mdash; Select Subtype</h2><div class="grid">`;
+  cat.subtypes.forEach(sub => {
+    html += `<button class="card" data-action="select-subtype" data-id="${sub.id}">
+      <span>${sub.name}</span>
+      <span>&rarr;</span>
+    </button>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function renderEstimator() {
+  const cat = config.categories.find(c => c.id === selectedCategory);
+  if (!cat) return '';
+  const sub = cat.subtypes.find(s => s.id === selectedSubtype);
+  if (!sub) return '';
+  
+  const price = getPrice(cat.id, sub.id);
+  const labor = getLabor(cat.id, sub.id);
+  const waste = getWaste(cat.id, sub.id);
+
+  return `
+    <h2 class="mb-8">${cat.name} / ${sub.name}</h2>
+    
+    <div class="form-group">
+      <label for="input-price">Unit Price ($ per ${sub.unit})</label>
+      <input type="number" id="input-price" value="${price}" min="0" step="0.01">
+    </div>
+
+    <div class="form-group">
+      <label for="input-qty">Quantity (${sub.unit})</label>
+      <input type="number" id="input-qty" value="0" min="0" step="1">
+    </div>
+
+    <div class="form-group">
+      <label for="input-labor">Labor (%)</label>
+      <input type="number" id="input-labor" value="${labor}" min="0" step="1">
+    </div>
+
+    <div class="form-group">
+      <label for="input-waste">Waste (%)</label>
+      <input type="number" id="input-waste" value="${waste}" min="0" step="1">
+    </div>
+
+    <div class="mt-8 pt-4 border-t">
+      <table class="table">
+        <tbody>
+          <tr>
+            <td>Subtotal (Qty &times; Price)</td>
+            <td id="val-subtotal">$0.00</td>
+          </tr>
+          <tr>
+            <td>Labor Cost</td>
+            <td id="val-labor">$0.00</td>
+          </tr>
+          <tr>
+            <td>Waste Cost</td>
+            <td id="val-waste">$0.00</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th class="text-xl pt-4">Total Estimate</th>
+            <th class="text-2xl pt-4" id="val-total">$0.00</th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  `;
+}
+
+function attachEstimatorEvents() {
+  const inputPrice = document.getElementById('input-price');
+  const inputQty = document.getElementById('input-qty');
+  const inputLabor = document.getElementById('input-labor');
+  const inputWaste = document.getElementById('input-waste');
+
+  function calculate() {
+    const price = parseFloat(inputPrice.value) || 0;
+    const qty = parseFloat(inputQty.value) || 0;
+    const laborPct = parseFloat(inputLabor.value) || 0;
+    const wastePct = parseFloat(inputWaste.value) || 0;
+
+    // Save overrides
+    setPrice(selectedCategory, selectedSubtype, price);
+    setLabor(selectedCategory, selectedSubtype, laborPct);
+    setWaste(selectedCategory, selectedSubtype, wastePct);
+
+    const subtotal = price * qty;
+    const laborCost = subtotal * (laborPct / 100);
+    const wasteCost = subtotal * (wastePct / 100);
+    const total = subtotal + laborCost + wasteCost;
+
+    document.getElementById('val-subtotal').innerText = formatMoney(subtotal);
+    document.getElementById('val-labor').innerText = formatMoney(laborCost);
+    document.getElementById('val-waste').innerText = formatMoney(wasteCost);
+    document.getElementById('val-total').innerText = formatMoney(total);
+  }
+
+  inputPrice.addEventListener('input', calculate);
+  inputQty.addEventListener('input', calculate);
+  inputLabor.addEventListener('input', calculate);
+  inputWaste.addEventListener('input', calculate);
+}
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+  loadData();
+  
+  document.body.classList.remove('no-scroll-modal');
+  currentView = 'categories';
+  selectedCategory = null;
+  selectedSubtype = null;
+  
+  document.getElementById('btn-back').addEventListener('click', goBack);
+  document.getElementById('btn-reset').addEventListener('click', resetData);
+  document.getElementById('btn-contractors').addEventListener('click', () => {
+    currentView = 'contractors';
+    render();
+  });
+  
+  const modal = document.getElementById('modal-add-contractor');
+  const inputName = document.getElementById('input-contractor-name');
+  
+  function closeModal() {
+    modal.classList.add('hidden');
+    document.body.classList.remove('no-scroll-modal');
+  }
+  
+  document.getElementById('btn-cancel-contractor').addEventListener('click', closeModal);
+  
+  document.getElementById('btn-save-contractor').addEventListener('click', () => {
+    const name = inputName.value;
+    if (name && name.trim()) {
+      const newId = 'contractor_' + Date.now();
+      userData.profiles[newId] = {
+        name: name.trim(),
+        prices: {},
+        labor: {},
+        waste: {}
+      };
+      userData.currentProfile = newId;
+      saveData();
+      currentView = 'categories';
+      closeModal();
+      render();
+    }
+  });
+
+  // Event delegation for dynamically rendered buttons
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    
+    const action = btn.getAttribute('data-action');
+    const id = btn.getAttribute('data-id');
+
+    if (action === 'select-category') {
+      selectedCategory = id;
+      currentView = 'subtypes';
+      render();
+    } else if (action === 'select-subtype') {
+      selectedSubtype = id;
+      currentView = 'estimator';
+      render();
+    } else if (action === 'add-profile') {
+      const modal = document.getElementById('modal-add-contractor');
+      const input = document.getElementById('input-contractor-name');
+      input.value = '';
+      modal.classList.remove('hidden');
+      document.body.classList.add('no-scroll-modal');
+      input.focus();
+    } else if (action === 'select-profile') {
+      userData.currentProfile = id;
+      saveData();
+      currentView = 'categories';
+      render();
+    }
+  });
+
+  render();
+});
